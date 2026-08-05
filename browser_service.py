@@ -48,66 +48,101 @@ class BrowserService:
         print("Playwright: Logged in! Current Title:", self.page.title())
         return True
 
-    def get_pending_quizzes(self):
-        print("Playwright: Navigating to Dashboard...")
+    def extract_courses_from_dashboard(self):
+        """Scans the DOM for course indices and titles."""
+        print("Playwright: Navigating to Dashboard to extract courses...")
         self.page.goto("https://vulms.vu.edu.pk/home.aspx")
         self.page.wait_for_load_state("networkidle")
         
-        # 1. Dashboard se tamam Quiz links (hrefs) extract karna
-        print("Playwright: Extracting quiz links...")
-        quiz_links = set() # Set ta ke duplicate links jama na hon
-        elements = self.page.locator("a[href*='QuizList.aspx']").all()
+        courses_dict = {}
+        # Find all elements matching the id pattern MainContent_gvCourseList_ibtnCourseHome_*
+        course_links = self.page.locator("a[id^='MainContent_gvCourseList_ibtnCourseHome_'], input[id^='MainContent_gvCourseList_ibtnCourseHome_']").all()
         
-        for el in elements:
-            href = el.get_attribute("href")
-            if href:
-                # Agar link relative hai to usey absolute banayen
-                full_url = href if href.startswith("http") else f"https://vulms.vu.edu.pk/{href.lstrip('/')}"
-                quiz_links.add(full_url)
+        for link in course_links:
+            # Skip if disabled (no active quizzes)
+            cls = link.get_attribute("class") or ""
+            if "aspNetDisabled" in cls:
+                continue
                 
-        print(f"Playwright: Found {len(quiz_links)} unique quiz pages.")
+            element_id = link.get_attribute("id")
+            title = link.get_attribute("title")
+            
+            if element_id and title:
+                # Extract the numeric index from the end of the ID
+                # Example ID: MainContent_gvCourseList_ibtnCourseHome_0
+                parts = element_id.split("_")
+                for part in reversed(parts):
+                    if part.isdigit():
+                        index_val = int(part)
+                        # Agar ye index pehle save nahi hua, to dictionary mein daal do
+                        if index_val not in courses_dict:
+                            courses_dict[index_val] = title.strip()
+                        break
+                        
+        # Dictionary ko wapis list of dicts mein convert karna ta ke sorted rahay
+        courses = [{"index": k, "name": v} for k, v in sorted(courses_dict.items())]
         
-        pending_quizzes = []
+        print(f"Playwright: Extracted {len(courses)} unique active courses from Dashboard.")
+        return courses
+
+    def scrape_course_quizzes(self, index, course_name):
+        """Clicks the quiz icon for the given index, scrapes the table, and clicks back."""
+        print(f"Playwright: Scraping quizzes for {course_name} (Index {index})...")
         
-        # 2. Har quiz page par jana aur table read karna
-        for url in quiz_links:
-            print(f"Playwright: Checking quizzes at {url}")
-            self.page.goto(url)
+        # Click the specific course's Quizzes icon
+        quiz_icon_id = f"MainContent_gvCourseList_ibtnQuizzes_{index}"
+        
+        # Playwright auto-waits for the element to be visible and clickable
+        try:
+            self.page.locator(f"id={quiz_icon_id}").click(timeout=10000)
+            # Wait for postback to complete and quiz table to load
+            self.page.wait_for_load_state("networkidle")
+        except Exception as e:
+            print(f"Playwright Error: Could not click quiz icon for {course_name}. Skipping.")
+            return []
+            
+        quizzes = []
+        
+        # Extract table rows
+        rows = self.page.locator("tr").all()
+        for row in rows[1:]: # Skip header
+            text = row.inner_text().lower()
+            if "quiz #" in text:
+                cols = row.locator("td").all()
+                if len(cols) >= 7:
+                    quiz_title = cols[1].inner_text().strip()
+                    start_date = cols[2].inner_text().strip()
+                    end_date = cols[3].inner_text().strip()
+                    # Screenshot se dekha ja sakta hai ke columns kis tarteeb mein hain
+                    total_marks = cols[4].inner_text().strip() if len(cols) > 4 else "0"
+                    open_close = cols[5].inner_text().strip() if len(cols) > 5 else "Closed"
+                    status = cols[6].inner_text().strip() if len(cols) > 6 else ""
+                    result = cols[7].inner_text().strip() if len(cols) > 7 else "0"
+                    
+                    quizzes.append({
+                        "number": len(quizzes) + 1,
+                        "title": quiz_title,
+                        "start": start_date,
+                        "end": end_date,
+                        "totalMarks": total_marks,
+                        "open_close": open_close,
+                        "status": status,
+                        "result": result
+                    })
+                    print(f"   -> Scraped: {quiz_title} | Status: {status}")
+                    
+        # Click the Back button to return cleanly (maintaining session context)
+        # Screenshot mein ek "< Back" button nazar aata hai upper right corner mein
+        back_btn = self.page.locator("a:has-text('Back'), a:has-text('◀ Back'), input[value*='Back'], a.back-btn")
+        if back_btn.count() > 0:
+            back_btn.first.click()
+            self.page.wait_for_load_state("networkidle")
+        else:
+            print("Playwright Warning: 'Back' button not found, falling back to home.aspx")
+            self.page.goto("https://vulms.vu.edu.pk/home.aspx")
             self.page.wait_for_load_state("networkidle")
             
-            # Course Title (Subject Name) nikalna
-            course_title = "Unknown Course"
-            # H1, H2 ya kisi page-title tag se course name uthana
-            title_locators = self.page.locator("span[id*='lblCourseName'], h1, h2, .page-title")
-            if title_locators.count() > 0:
-                course_title = title_locators.first.inner_text().strip()
-                
-            # Table ki tamam rows nikalna
-            rows = self.page.locator("tr").all()
-            for row in rows[1:]: # Skip header row
-                text = row.inner_text().lower()
-                
-                if "quiz #" in text:
-                    # Columns extract karna (Title, Start Date, End Date, Status)
-                    cols = row.locator("td").all()
-                    if len(cols) >= 7:
-                        quiz_title = cols[1].inner_text().strip()
-                        start_date = cols[2].inner_text().strip()
-                        end_date = cols[3].inner_text().strip()
-                        status = cols[6].inner_text().strip()
-                        
-                        print(f"   -> [Course: {course_title}] {quiz_title} | Status: {status} | Dates: {start_date} to {end_date}")
-                        
-                        # Agar closed nahi hai to pending mein daal do
-                        if "closed" not in text and "result declared" not in text:
-                            print(f"✅ OPEN QUIZ FOUND! Subject: {course_title}")
-                            pending_quizzes.append({
-                                "subject": course_title,
-                                "title": quiz_title,
-                                "url": url
-                            })
-                            
-        return pending_quizzes
+        return quizzes
 
 # Singleton instance ta ke pura project aik hi browser session use kare
 browser_service = BrowserService()

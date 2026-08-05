@@ -1,16 +1,21 @@
-from typing import Annotated, List, Dict, Any
+from typing import TypedDict, Annotated, List, Dict, Any
 from langgraph.graph.message import add_messages
-from pydantic import BaseModel, Field
+import operator
 
-# Pydantic Model (BaseModel) ka faida ye hai ke ye strict validation karta hai.
-class AgentState(BaseModel):
+class AgentState(TypedDict):
     # Chat/Log history
-    messages: Annotated[list, add_messages] = Field(default_factory=list)
+    messages: Annotated[list, add_messages]
     
     # Custom States 
-    portal_status: str = Field(default="logged_out", description="Status of the VU portal login")
+    portal_status: str
     
-    # Pydantic mein hum default values de sakte hain
-    pending_quizzes: List[Dict[str, Any]] = Field(default_factory=list)
-    current_quiz_status: str = Field(default="none")
-    quiz_results: List[Dict[str, Any]] = Field(default_factory=list)
+    # --- New Architecture States for ASP.NET PostBack Loop ---
+    courses: List[Dict[str, Any]]
+    currentCourseIndex: int
+    quizData: Dict[str, List[Dict[str, Any]]]
+    pending_quizzes_summary: Dict[str, Any]
+    # ---------------------------------------------------------
+
+    pending_quizzes: List[Dict[str, Any]]
+    current_quiz_status: str
+    quiz_results: List[Dict[str, Any]]
