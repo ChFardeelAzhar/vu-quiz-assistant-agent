@@ -70,7 +70,7 @@ def quiz_scraper_router(state: AgentState) -> str:
         return "analyze"
 
 def quiz_analyzer_node(state: AgentState):
-    print("-> Quiz Analyzer Node Called: Computing summaries...")
+    print("-> Quiz Analyzer Node Called: Computing summaries & Saving MD files...")
     
     pending = []
     attempted = []
@@ -78,7 +78,25 @@ def quiz_analyzer_node(state: AgentState):
     
     quiz_data = state.get("quizData", {})
     
+    # MD Files ke liye output folder banayen
+    output_dir = "output"
+    os.makedirs(output_dir, exist_ok=True)
+    
     for course_name, quizzes in quiz_data.items():
+        # Har course ke liye markdown file banana
+        safe_name = "".join([c for c in course_name if c.isalpha() or c.isdigit() or c==' ']).rstrip()
+        filepath = os.path.join(output_dir, f"{safe_name}.md")
+        
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(f"# {course_name} - Quizzes Summary\n\n")
+            if not quizzes:
+                f.write("> Is course ki koi quiz available nahi hai.\n")
+            else:
+                f.write("| # | Quiz Title | Start Date | End Date | Total Marks | Open/Close | Status | Result |\n")
+                f.write("|---|---|---|---|---|---|---|---|\n")
+                for q in quizzes:
+                    f.write(f"| {q['number']} | {q['title']} | {q['start']} | {q['end']} | {q['totalMarks']} | {q['open_close']} | {q['status']} | {q['result']} |\n")
+                    
         for quiz in quizzes:
             status = quiz["status"].lower()
             open_close = quiz["open_close"].lower()
@@ -105,6 +123,7 @@ def quiz_analyzer_node(state: AgentState):
         "upcoming": upcoming
     }
     
+    print(f"\n✅ All courses data saved in '{output_dir}/' folder.")
     print("\n=== PENDING QUIZZES SUMMARY ===")
     import json
     print(json.dumps(summary, indent=2))

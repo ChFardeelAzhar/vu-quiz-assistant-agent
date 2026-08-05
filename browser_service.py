@@ -87,58 +87,152 @@ class BrowserService:
 
     def scrape_course_quizzes(self, index, course_name):
         """Clicks the quiz icon for the given index, scrapes the table, and clicks back."""
-        print(f"Playwright: Scraping quizzes for {course_name} (Index {index})...")
+        print(f"\nPlaywright: Scraping quizzes for {course_name} (Index {index})...")
         
-        # Click the specific course's Quizzes icon
         quiz_icon_id = f"MainContent_gvCourseList_ibtnQuizzes_{index}"
         
-        # Playwright auto-waits for the element to be visible and clickable
         try:
-            self.page.locator(f"id={quiz_icon_id}").click(timeout=10000)
-            # Wait for postback to complete and quiz table to load
-            self.page.wait_for_load_state("networkidle")
+            with self.page.expect_navigation(timeout=15000):
+                self.page.locator(f"id={quiz_icon_id}").click(timeout=10000)
         except Exception as e:
-            print(f"Playwright Error: Could not click quiz icon for {course_name}. Skipping.")
+            print(f"Playwright Error: Could not navigate to quiz page for {course_name}. Skipping.")
             return []
             
+        print(f"   -> Navigated to URL: {self.page.url}")
         quizzes = []
         
-        # Extract table rows
-        rows = self.page.locator("tr").all()
-        for row in rows[1:]: # Skip header
-            text = row.inner_text().lower()
-            if "quiz #" in text:
-                cols = row.locator("td").all()
-                if len(cols) >= 7:
-                    quiz_title = cols[1].inner_text().strip()
-                    start_date = cols[2].inner_text().strip()
-                    end_date = cols[3].inner_text().strip()
-                    # Screenshot se dekha ja sakta hai ke columns kis tarteeb mein hain
-                    total_marks = cols[4].inner_text().strip() if len(cols) > 4 else "0"
-                    open_close = cols[5].inner_text().strip() if len(cols) > 5 else "Closed"
-                    status = cols[6].inner_text().strip() if len(cols) > 6 else ""
-                    result = cols[7].inner_text().strip() if len(cols) > 7 else "0"
+        # Wait specifically for the quiz table to appear (waiting for the word 'Title' or 'Marks')
+        try:
+            self.page.wait_for_selector("text='Total Marks'", timeout=5000)
+            print("   -> Quiz table header found. Waiting 2 seconds for DOM to settle...")
+            self.page.wait_for_timeout(2000) # Hard wait to ensure AJAX/rendering finishes
+        except:
+            print("   -> Playwright Warning: Quiz table header ('Total Marks') not found within 5s.")
+            
+        # Extract grid rows using the Repeater Panel IDs
+        panels = self.page.locator("div[id*='gvTileRepeaterQuiz_pnl_']").all()
+        print(f"   -> Found {len(panels)} quiz panels on this page.")
+        
+        # If panels are found, process each one individually
+        if len(panels) > 0:
+            for panel in panels:
+                try:
+                    text = panel.inner_text().strip()
+                    lines = [line.strip() for line in text.split('\n') if line.strip()]
                     
-                    quizzes.append({
-                        "number": len(quizzes) + 1,
-                        "title": quiz_title,
-                        "start": start_date,
-                        "end": end_date,
-                        "totalMarks": total_marks,
-                        "open_close": open_close,
-                        "status": status,
-                        "result": result
-                    })
-                    print(f"   -> Scraped: {quiz_title} | Status: {status}")
+                    # Find the title index
+                    title_idx = -1
+                    for i, line in enumerate(lines):
+                        text_lower = line.lower()
+                        if "quiz" in text_lower and len(text_lower) < 40 and "chrome" not in text_lower:
+                            title_idx = i
+                            break
+                            
+                    if title_idx != -1:
+                        title = lines[title_idx]
+                        start = "N/A"
+                        end = "N/A"
+                        marks = "0"
+                        open_close = "Closed"
+                        status = ""
+                        result = "0"
+                        
+                        curr = title_idx + 1
+                        if curr < len(lines):
+                            start = lines[curr]
+                            curr += 1
+                        if curr < len(lines):
+                            end = lines[curr]
+                            curr += 1
+                        if curr < len(lines):
+                            marks = lines[curr]
+                            curr += 1
+                        if curr < len(lines):
+                            open_close = lines[curr]
+                            curr += 1
+                        if curr < len(lines):
+                            val = lines[curr]
+                            # If it's a number, it's the result and status was empty
+                            if val.isdigit() or val == "N/A" or val == "-":
+                                result = val
+                            else:
+                                status = val
+                                curr += 1
+                                if curr < len(lines):
+                                    result = lines[curr]
+                                    
+                        if not any(q['title'] == title for q in quizzes):
+                            quizzes.append({
+                                "number": len(quizzes) + 1,
+                                "title": title,
+                                "start": start,
+                                "end": end,
+                                "totalMarks": marks,
+                                "open_close": open_close,
+                                "status": status,
+                                "result": result
+                            })
+                            print(f"   -> ✅ Extracted: {title} | Status: {status}")
+                except Exception as e:
+                    print(f"   -> ❌ Error parsing quiz panel: {e}")
+        else:
+            # Fallback: Extract all text from the main container and chunk it
+            print("   -> No panels found. Attempting fallback full-text parsing...")
+            container = self.page.locator(".Accounttbl").last
+            if container.count() == 0:
+                container = self.page.locator("body")
+                
+            text = container.inner_text().strip()
+            lines = [line.strip() for line in text.split('\n') if line.strip()]
+            
+            idx = 0
+            while idx < len(lines):
+                text_lower = lines[idx].lower()
+                if "quiz" in text_lower and len(text_lower) < 40 and "chrome" not in text_lower:
+                    try:
+                        title = lines[idx]
+                        start = lines[idx+1] if idx+1 < len(lines) else ""
+                        end = lines[idx+2] if idx+2 < len(lines) else ""
+                        marks = lines[idx+3] if idx+3 < len(lines) else "0"
+                        open_close = lines[idx+4] if idx+4 < len(lines) else "Closed"
+                        status = lines[idx+5] if idx+5 < len(lines) else ""
+                        result = lines[idx+6] if idx+6 < len(lines) else "0"
+                        
+                        if status.isdigit() or status == "N/A" or status == "-":
+                            result = status
+                            status = ""
+                            idx += 6
+                        else:
+                            idx += 7
+                            
+                        if not any(q['title'] == title for q in quizzes):
+                            quizzes.append({
+                                "number": len(quizzes) + 1,
+                                "title": title,
+                                "start": start,
+                                "end": end,
+                                "totalMarks": marks,
+                                "open_close": open_close,
+                                "status": status,
+                                "result": result
+                            })
+                            print(f"   -> ✅ Extracted (Fallback): {title} | Status: {status}")
+                    except IndexError:
+                        idx += 1
+                else:
+                    idx += 1
                     
-        # Click the Back button to return cleanly (maintaining session context)
-        # Screenshot mein ek "< Back" button nazar aata hai upper right corner mein
+        # Click the Back button to return cleanly
         back_btn = self.page.locator("a:has-text('Back'), a:has-text('◀ Back'), input[value*='Back'], a.back-btn")
         if back_btn.count() > 0:
-            back_btn.first.click()
-            self.page.wait_for_load_state("networkidle")
+            try:
+                with self.page.expect_navigation(timeout=15000):
+                    back_btn.first.click()
+            except:
+                self.page.goto("https://vulms.vu.edu.pk/home.aspx")
+                self.page.wait_for_load_state("networkidle")
         else:
-            print("Playwright Warning: 'Back' button not found, falling back to home.aspx")
+            print("   -> 'Back' button not found, falling back to home.aspx")
             self.page.goto("https://vulms.vu.edu.pk/home.aspx")
             self.page.wait_for_load_state("networkidle")
             
