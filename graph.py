@@ -143,8 +143,15 @@ def quiz_solver_node(state: AgentState):
     remaining_quizzes = pending_list[1:] if pending_list else []
     return {"current_quiz_status": "completed", "pending_quizzes": remaining_quizzes}
 
+from email_service import email_service
+
 def email_notifier_node(state: AgentState):
     print("-> Email Notifier Node Called: Sending Report via Resend...")
+    summary = state.get("pending_quizzes_summary", {})
+    if summary:
+        email_service.send_report(summary)
+    else:
+        print("   -> No summary data found to email.")
     return state
 
 def should_continue(state: AgentState) -> str:
